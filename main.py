@@ -6,25 +6,21 @@ import os
 
 app = FastAPI()
 
-# Get the signing key from an environment variable
-# IMPORTANT: Store this securely.
 SIGNING_KEY = os.environ.get("GOOGLE_CHAT_SIGNING_KEY")
 
 @app.post("/chat-bot")
 async def chat_bot(request: Request):
     """
-    Handles incoming messages from Google Chat, now with correct JSON parsing.
+    Handles incoming messages from Google Chat with robust error handling.
     """
     if not SIGNING_KEY:
         raise HTTPException(status_code=500, detail="Google Chat signing key is not set.")
 
-    # Get headers
     timestamp = request.headers.get("X-Google-Signature-Timestamp")
     signature = request.headers.get("X-Google-Signature")
-    
+
     body = await request.body()
     
-    # Verify the request signature
     if not verify_signature(timestamp, signature, body, SIGNING_KEY):
         raise HTTPException(status_code=401, detail="Invalid signature.")
 
@@ -32,30 +28,31 @@ async def chat_bot(request: Request):
         data = json.loads(body)
         print(f"Received data: {data}")
 
-        # The 'event_type' is now extracted from the `chat` or other top-level objects
-        event_type = None
-        if data.get("type"):
-            event_type = data.get("type")
-        elif data.get("messagePayload") and data.get("messagePayload").get("message"):
-            event_type = "MESSAGE"
-        
-        if event_type == "MESSAGE":
-            # Correctly access the message text from the nested structure
-            message_text = data.get("messagePayload").get("message", {}).get("text", "").lower()
-            response_text = "Thanks for the message!"
-            
-            # Simple keyword-based response
-            if "hello" in message_text:
-                response_text = "Hello there! How can I help you today? 👋"
-            elif "help" in message_text:
-                response_text = "I am a simple bot. You can say 'hello' or 'help'!"
+        # The 'type' key might be nested, so we check for different event types.
+        if data.get("type") == "ADDED_TO_SPACE":
+            return {"text": "Thanks for adding me to this space! How can I help?"}
 
-            return {"text": response_text}
+        # Check for message events, which are common payloads
+        if 'message' in data:
+            message_text = data.get("message", {}).get("text", "").lower()
+            if "hello" in message_text:
+                return {"text": "Hello there! 👋"}
+            elif "help" in message_text:
+                return {"text": "I am a simple bot. You can say 'hello'!"}
+            else:
+                return {"text": "I received your message."}
+
+        # Handle events with a message payload, like from a bot-DM
+        if 'messagePayload' in data and 'message' in data['messagePayload']:
+            message_text = data['messagePayload']['message'].get('text', '').lower()
+            if "hello" in message_text:
+                return {"text": "Hello there! 👋"}
+            elif "help" in message_text:
+                return {"text": "I am a simple bot."}
+            else:
+                return {"text": "Thanks for the message!"}
         
-        # Handle `ADDED_TO_SPACE` and other events
-        elif event_type == "ADDED_TO_SPACE":
-            return {"text": "Thanks for adding me to this space!"}
-        
+        # Default response for unhandled events
         return {"text": "I'm a bot and can't process that event type yet."}
 
     except json.JSONDecodeError:
@@ -65,7 +62,6 @@ def verify_signature(timestamp: str, signature: str, body: bytes, signing_key: s
     """
     Verifies the request signature from Google Chat.
     """
-    # ... (same function as before)
     if not all([timestamp, signature, body, signing_key]):
         return False
     
